@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Charging Station Locator</title>
+    <link rel="stylesheet" type="text/css" href="https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps.css">
+    <script src="https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps-web.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -345,6 +347,19 @@ body::before {
             overflow: hidden;
         }
 
+        #map {
+            width: 100%;
+            height: 400px;
+            border-radius: 15px;
+            margin-bottom: 2rem;
+            background: #f0f0f0;
+            display: block;
+        }
+
+        .mapboxgl-map {
+            border-radius: 15px;
+        }
+
         .map-placeholder::before {
             content: '';
             position: absolute;
@@ -585,19 +600,28 @@ body::before {
                     Use Current Location
                 </button>
                 
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem;">
+                    <button class="filter-btn" onclick="clearAllFilters()" style="flex: 1; background: #6b7280; color: white; border: none; padding: 0.7rem; border-radius: 10px; cursor: pointer; font-size: 0.9rem;">
+                        Clear Filters
+                    </button>
+                    <button class="filter-btn" onclick="selectAllFilters()" style="flex: 1; background: rgba(16, 185, 129, 0.9); color: white; border: none; padding: 0.7rem; border-radius: 10px; cursor: pointer; font-size: 0.9rem;">
+                        Select All
+                    </button>
+                </div>
+                
                 <div class="filter-section">
                     <h3 class="filter-title">Charging Speed</h3>
                     <div class="checkbox-group">
                         <div class="checkbox-item">
-                            <input type="checkbox" id="level1" checked>
+                            <input type="checkbox" id="level1">
                             <label for="level1">Level 1 (120V)</label>
                         </div>
                         <div class="checkbox-item">
-                            <input type="checkbox" id="level2" checked>
+                            <input type="checkbox" id="level2">
                             <label for="level2">Level 2 (240V)</label>
                         </div>
                         <div class="checkbox-item">
-                            <input type="checkbox" id="dcfast" checked>
+                            <input type="checkbox" id="dcfast">
                             <label for="dcfast">DC Fast Charging</label>
                         </div>
                     </div>
@@ -607,15 +631,15 @@ body::before {
                     <h3 class="filter-title">Network</h3>
                     <div class="checkbox-group">
                         <div class="checkbox-item">
-                            <input type="checkbox" id="tesla" checked>
+                            <input type="checkbox" id="tesla">
                             <label for="tesla">Tesla</label>
                         </div>
                         <div class="checkbox-item">
-                            <input type="checkbox" id="chargepoint" checked>
+                            <input type="checkbox" id="chargepoint">
                             <label for="chargepoint">ChargePoint</label>
                         </div>
                         <div class="checkbox-item">
-                            <input type="checkbox" id="evgo" checked>
+                            <input type="checkbox" id="evgo">
                             <label for="evgo">EVgo</label>
                         </div>
                     </div>
@@ -625,7 +649,7 @@ body::before {
                     <h3 class="filter-title">Availability</h3>
                     <div class="checkbox-group">
                         <div class="checkbox-item">
-                            <input type="checkbox" id="available" checked>
+                            <input type="checkbox" id="available">
                             <label for="available">Available Now</label>
                         </div>
                         <div class="checkbox-item">
@@ -637,10 +661,14 @@ body::before {
             </aside>
             
             <main class="map-section">
-                <div class="map-placeholder">
-                    <div class="map-icon">🗺️</div>
-                    <div class="map-text">Interactive Map</div>
-                    <div style="color: #9ca3af;">Charging stations will be displayed here</div>
+                <div id="map">
+                    <div id="mapFallback" style="display: flex; align-items: center; justify-content: center; height: 400px; background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%); border-radius: 15px; color: #666;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">🗺️</div>
+                            <div style="font-size: 1.2rem; margin-bottom: 0.5rem;">Loading Interactive Map...</div>
+                            <div style="font-size: 0.9rem; color: #888;">TomTom Maps with charging stations</div>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="legend">
@@ -670,26 +698,9 @@ body::before {
                     
                     <div class="loading-spinner" id="loadingSpinner"></div>
                     
-                    <div class="station-card hover-glow">
-                        <div class="station-header">
-                            <div class="station-name">Green Charge Hub</div>
-                            <div class="station-status available">Available</div>
-                        </div>
-                        <div class="station-info">
-                            <span>Speed: Level 2</span>
-                            <span>0.5 miles</span>
-                        </div>
-                    </div>
                     
-                    <div class="station-card hover-glow">
-                        <div class="station-header">
-                            <div class="station-name">CityFast Charge</div>
-                            <div class="station-status occupied">Occupied</div>
-                        </div>
-                        <div class="station-info">
-                            <span>Speed: DC Fast</span>
-                            <span>1.2 miles</span>
-                        </div>
+                    <div id="stationsList">
+                        <!-- Dynamic charging stations will be loaded here -->
                     </div>
                 </div>
             </main>
@@ -697,22 +708,356 @@ body::before {
     </div>
 
     <script>
-        function searchStations() {
-            const spinner = document.getElementById('loadingSpinner');
-            const cards = document.querySelectorAll('.station-card');
+        const TOMTOM_API_KEY = 'Ef53CTgxRVmqpfickZ0r8CiKzpjuzTqU';  // Replace with your own TomTom API Key
+        let map;
+        let markers = [];
+        let currentLocation = { lat: 12.9716, lng: 77.5946 }; // Default to Bangalore
+        
+        // Initialize map
+        function initializeMap() {
+            try {
+                // Wait for TomTom SDK to load
+                if (typeof tt === 'undefined') {
+                    console.error('TomTom SDK not loaded');
+                    setTimeout(initializeMap, 1000);
+                    return;
+                }
+
+                // Hide fallback content
+                const fallback = document.getElementById('mapFallback');
+                if (fallback) {
+                    fallback.style.display = 'none';
+                }
+
+                map = tt.map({
+                    key: TOMTOM_API_KEY,
+                    container: 'map',
+                    center: [currentLocation.lng, currentLocation.lat],
+                    zoom: 12,
+                    style: 'https://api.tomtom.com/style/1/style/22.2.1-*?map=basic_main&poi=poi_main&key=' + TOMTOM_API_KEY
+                });
+                
+                map.on('load', function() {
+                    console.log('Map loaded successfully');
+                    searchChargingStations();
+                });
+
+                map.on('error', function(e) {
+                    console.error('Map error:', e);
+                    showMapError();
+                });
+
+            } catch (error) {
+                console.error('Error initializing map:', error);
+                showMapError();
+            }
+        }
+
+        function showMapError() {
+            const mapContainer = document.getElementById('map');
+            mapContainer.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: center; height: 400px; background: #f0f0f0; border-radius: 15px; color: #666; border: 2px dashed #ccc;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 2rem; margin-bottom: 1rem;">⚠️</div>
+                        <div style="font-size: 1.1rem; margin-bottom: 0.5rem;">Map temporarily unavailable</div>
+                        <div style="font-size: 0.9rem; color: #888;">Charging stations will still be displayed below</div>
+                        <button onclick="initializeMap()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: rgba(16, 185, 129, 0.9); color: white; border: none; border-radius: 5px; cursor: pointer;">
+                            Retry Loading Map
+                        </button>
+                    </div>
+                </div>
+            `;
+            // Still search for charging stations even if map fails
+            setTimeout(searchChargingStations, 1000);
+        }
+        
+        // Search for charging stations
+        function searchChargingStations() {
+            // Clear existing markers
+            clearMarkers();
             
             // Show loading
+            const spinner = document.getElementById('loadingSpinner');
             spinner.style.display = 'block';
-            cards.forEach(card => card.style.opacity = '0.5');
             
-            // Simulate search
-            setTimeout(() => {
-                spinner.style.display = 'none';
-                cards.forEach(card => {
-                    card.style.opacity = '1';
-                    card.style.animation = 'slideInUp 0.6s ease-out';
+            // TomTom POI Search for charging stations
+            const searchUrl = `https://api.tomtom.com/search/2/poiSearch/charging%20station.json?lat=${currentLocation.lat}&lon=${currentLocation.lng}&radius=5000&key=${TOMTOM_API_KEY}&limit=20`;
+            
+            fetch(searchUrl)
+                .then(response => response.json())
+                .then(data => {
+                    spinner.style.display = 'none';
+                    displayChargingStations(data.results);
+                })
+                .catch(error => {
+                    console.error('Error fetching charging stations:', error);
+                    spinner.style.display = 'none';
+                    // Show sample data if API fails
+                    displaySampleData();
                 });
-            }, 1500);
+        }
+        
+        // Display charging stations on map and list
+        function displayChargingStations(stations) {
+            const stationsList = document.getElementById('stationsList');
+            stationsList.innerHTML = '';
+            
+            // Apply filters if any are selected
+            const filteredStations = applyFilters(stations);
+            
+            filteredStations.forEach((station, index) => {
+                // Add marker to map only if map is loaded
+                if (map && map.isStyleLoaded()) {
+                    try {
+                        const marker = new tt.Marker({
+                            color: getStationColor(station)
+                        })
+                        .setLngLat([station.position.lon, station.position.lat])
+                        .setPopup(new tt.Popup().setHTML(`
+                            <div style="padding: 10px;">
+                                <h4>${station.poi.name}</h4>
+                                <p>${station.address.freeformAddress}</p>
+                                <p>Distance: ${(station.dist / 1000).toFixed(1)} km</p>
+                            </div>
+                        `))
+                        .addTo(map);
+                        
+                        markers.push(marker);
+                    } catch (error) {
+                        console.error('Error adding marker:', error);
+                    }
+                }
+                
+                // Add to list
+                const stationCard = createStationCard(station, index);
+                stationsList.appendChild(stationCard);
+            });
+            
+            // Show message if no stations match filters
+            if (filteredStations.length === 0 && hasActiveFilters()) {
+                stationsList.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: #6b7280;">
+                        <div style="font-size: 2rem; margin-bottom: 1rem;">🔍</div>
+                        <div style="font-size: 1.1rem; margin-bottom: 0.5rem;">No charging stations match your filters</div>
+                        <div style="font-size: 0.9rem;">Try adjusting your filter selections</div>
+                    </div>
+                `;
+            }
+        }
+        
+        // Apply filters to stations
+        function applyFilters(stations) {
+            // If no filters are selected, show all stations
+            if (!hasActiveFilters()) {
+                return stations;
+            }
+            
+            const selectedSpeeds = getSelectedChargingSpeeds();
+            const selectedNetworks = getSelectedNetworks();
+            const showAvailable = document.getElementById('available').checked;
+            const showOccupied = document.getElementById('occupied').checked;
+            
+            return stations.filter(station => {
+                // For demo purposes, we'll randomly assign attributes to stations
+                // In a real app, this data would come from the API
+                const stationSpeed = getRandomSpeed();
+                const stationNetwork = getRandomNetwork();
+                const stationStatus = getRandomStatus();
+                
+                // Check speed filter
+                let speedMatch = selectedSpeeds.length === 0;
+                if (selectedSpeeds.includes('level1') && stationSpeed.includes('Level 1')) speedMatch = true;
+                if (selectedSpeeds.includes('level2') && stationSpeed.includes('Level 2')) speedMatch = true;
+                if (selectedSpeeds.includes('dcfast') && stationSpeed.includes('DC Fast')) speedMatch = true;
+                
+                // Check network filter
+                let networkMatch = selectedNetworks.length === 0;
+                if (selectedNetworks.includes('tesla') && stationNetwork === 'Tesla') networkMatch = true;
+                if (selectedNetworks.includes('chargepoint') && stationNetwork === 'ChargePoint') networkMatch = true;
+                if (selectedNetworks.includes('evgo') && stationNetwork === 'EVgo') networkMatch = true;
+                
+                // Check availability filter
+                let availabilityMatch = !showAvailable && !showOccupied; // If neither selected, show all
+                if (showAvailable && stationStatus.class === 'available') availabilityMatch = true;
+                if (showOccupied && stationStatus.class === 'occupied') availabilityMatch = true;
+                
+                // Station must match all selected filter categories
+                return (selectedSpeeds.length === 0 || speedMatch) && 
+                       (selectedNetworks.length === 0 || networkMatch) && 
+                       (!showAvailable && !showOccupied || availabilityMatch);
+            });
+        }
+        
+        // Check if any filters are active
+        function hasActiveFilters() {
+            const selectedSpeeds = getSelectedChargingSpeeds();
+            const selectedNetworks = getSelectedNetworks();
+            const showAvailable = document.getElementById('available').checked;
+            const showOccupied = document.getElementById('occupied').checked;
+            
+            return selectedSpeeds.length > 0 || selectedNetworks.length > 0 || showAvailable || showOccupied;
+        }
+        
+        // Create station card HTML
+        function createStationCard(station, index) {
+            const div = document.createElement('div');
+            div.className = 'station-card hover-glow';
+            div.style.animationDelay = `${index * 0.1}s`;
+            
+            const status = getRandomStatus();
+            const speed = getRandomSpeed();
+            const network = getRandomNetwork();
+            
+            div.innerHTML = `
+                <div class="station-header">
+                    <div class="station-name">${station.poi.name}</div>
+                    <div class="station-status ${status.class}">${status.text}</div>
+                </div>
+                <div class="station-info">
+                    <div>
+                        <span>Speed: ${speed}</span><br>
+                        <span>Network: ${network}</span><br>
+                        <span>Address: ${station.address.freeformAddress}</span>
+                    </div>
+                    <div style="text-align: right;">
+                        <span>${(station.dist / 1000).toFixed(1)} km</span><br>
+                        <button onclick="centerOnStation(${station.position.lat}, ${station.position.lon})" 
+                                style="background: rgba(16, 185, 129, 0.9); color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; margin-top: 5px;">
+                            View on Map
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            return div;
+        }
+        
+        // Helper functions
+        function getStationColor(station) {
+            const colors = ['#10b981', '#6b7280', '#ef4444'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+        
+        function getRandomStatus() {
+            const statuses = [
+                { class: 'available', text: 'Available' },
+                { class: 'occupied', text: 'Occupied' },
+                { class: 'available', text: 'Available' }
+            ];
+            return statuses[Math.floor(Math.random() * statuses.length)];
+        }
+        
+        function getRandomSpeed() {
+            const speeds = ['Level 1 (120V)', 'Level 2 (240V)', 'DC Fast Charging'];
+            return speeds[Math.floor(Math.random() * speeds.length)];
+        }
+        
+        function getRandomNetwork() {
+            const networks = ['Tesla', 'ChargePoint', 'EVgo', 'Blink', 'Electrify America'];
+            return networks[Math.floor(Math.random() * networks.length)];
+        }
+        
+        function centerOnStation(lat, lng) {
+            if (map && map.isStyleLoaded()) {
+                map.flyTo({
+                    center: [lng, lat],
+                    zoom: 15
+                });
+            }
+        }
+        
+        function clearMarkers() {
+            markers.forEach(marker => {
+                try {
+                    marker.remove();
+                } catch (error) {
+                    console.error('Error removing marker:', error);
+                }
+            });
+            markers = [];
+        }
+        
+        function getSelectedChargingSpeeds() {
+            const speeds = [];
+            if (document.getElementById('level1').checked) speeds.push('level1');
+            if (document.getElementById('level2').checked) speeds.push('level2');
+            if (document.getElementById('dcfast').checked) speeds.push('dcfast');
+            return speeds;
+        }
+        
+        function getSelectedNetworks() {
+            const networks = [];
+            if (document.getElementById('tesla').checked) networks.push('tesla');
+            if (document.getElementById('chargepoint').checked) networks.push('chargepoint');
+            if (document.getElementById('evgo').checked) networks.push('evgo');
+            return networks;
+        }
+        
+        // Display sample data if API fails
+        function displaySampleData() {
+            const sampleStations = [
+                {
+                    poi: { name: 'Green Charge Hub' },
+                    address: { freeformAddress: '123 Main St, Bangalore' },
+                    position: { lat: 12.9716, lon: 77.5946 },
+                    dist: 500
+                },
+                {
+                    poi: { name: 'CityFast Charge' },
+                    address: { freeformAddress: '456 Tech Park, Bangalore' },
+                    position: { lat: 12.9616, lon: 77.6046 },
+                    dist: 1200
+                }
+            ];
+            displayChargingStations(sampleStations);
+        }
+        
+        // Search function
+        function searchStations() {
+            const searchInput = document.querySelector('.search-input');
+            const location = searchInput.value.trim();
+            
+            if (!location) {
+                alert('Please enter a location to search');
+                return;
+            }
+            
+            // Geocoding to get coordinates of the searched location
+            const geocodeUrl = `https://api.tomtom.com/search/2/geocode/${encodeURIComponent(location)}.json?key=${TOMTOM_API_KEY}`;
+            
+            const spinner = document.getElementById('loadingSpinner');
+            spinner.style.display = 'block';
+            
+            fetch(geocodeUrl)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.results && data.results.length > 0) {
+                        const result = data.results[0];
+                        currentLocation = {
+                            lat: result.position.lat,
+                            lng: result.position.lon
+                        };
+                        
+                        // Update map center
+                        if (map && map.isStyleLoaded()) {
+                            map.flyTo({
+                                center: [currentLocation.lng, currentLocation.lat],
+                                zoom: 12
+                            });
+                        }
+                        
+                        // Search for charging stations at the new location
+                        searchChargingStations();
+                    } else {
+                        alert('Location not found. Please try a different search term.');
+                        spinner.style.display = 'none';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error geocoding location:', error);
+                    alert('Error searching for location. Please try again.');
+                    spinner.style.display = 'none';
+                });
         }
         
         function useCurrentLocation() {
@@ -722,27 +1067,112 @@ body::before {
             button.innerHTML = '<span>📍</span> Getting Location...';
             button.style.background = 'rgba(16, 185, 129, 0.7)';
             
-            setTimeout(() => {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        currentLocation = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+                        
+                        if (map && map.isStyleLoaded()) {
+                            map.flyTo({
+                                center: [currentLocation.lng, currentLocation.lat],
+                                zoom: 12
+                            });
+                        }
+                        
+                        button.innerHTML = originalText;
+                        button.style.background = 'rgba(16, 185, 129, 0.9)';
+                        
+                        searchChargingStations();
+                    },
+                    (error) => {
+                        console.error('Error getting location:', error);
+                        alert('Could not get your location. Using default location.');
+                        button.innerHTML = originalText;
+                        button.style.background = 'rgba(16, 185, 129, 0.9)';
+                        searchChargingStations();
+                    }
+                );
+            } else {
+                alert('Geolocation is not supported by this browser.');
                 button.innerHTML = originalText;
                 button.style.background = 'rgba(16, 185, 129, 0.9)';
-                searchStations();
-            }, 2000);
+            }
         }
         
         function sortStations() {
-            const cards = document.querySelectorAll('.station-card');
-            cards.forEach(card => {
-                card.style.animation = 'slideInUp 0.4s ease-out';
+            const sortValue = document.querySelector('.sort-select').value;
+            const stationCards = Array.from(document.querySelectorAll('.station-card'));
+            const stationsList = document.getElementById('stationsList');
+            
+            // Simple animation for sorting
+            stationCards.forEach((card, index) => {
+                card.style.animation = `slideInUp 0.4s ease-out ${index * 0.05}s`;
             });
+            
+            // Here you would implement actual sorting logic based on the sortValue
+            console.log('Sorting by:', sortValue);
         }
+        
+        // Clear all filters
+        function clearAllFilters() {
+            const filterCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+            filterCheckboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            console.log('All filters cleared');
+            setTimeout(searchChargingStations, 100);
+        }
+        
+        // Select all filters
+        function selectAllFilters() {
+            const filterCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+            filterCheckboxes.forEach(checkbox => {
+                checkbox.checked = true;
+            });
+            console.log('All filters selected');
+            setTimeout(searchChargingStations, 100);
+        }
+        
+        // Add event listeners for filter changes
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, initializing...');
+            
+            // Wait a bit for TomTom SDK to fully load
+            setTimeout(() => {
+                initializeMap();
+            }, 500);
+            
+            // Add change listeners to filters
+            const filterCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+            filterCheckboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    console.log('Filter changed:', this.id, this.checked);
+                    // Re-search when filters change (with a small delay to prevent rapid calls)
+                    setTimeout(searchChargingStations, 300);
+                });
+            });
+            
+            // Add enter key support for search
+            document.querySelector('.search-input').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    searchStations();
+                }
+            });
+        });
         
         // Add smooth scrolling
         document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             anchor.addEventListener('click', function (e) {
                 e.preventDefault();
-                document.querySelector(this.getAttribute('href')).scrollIntoView({
-                    behavior: 'smooth'
-                });
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth'
+                    });
+                }
             });
         });
         
@@ -760,9 +1190,10 @@ body::before {
             });
         }, observerOptions);
         
-        document.querySelectorAll('.station-card').forEach(card => {
+        // Observe station cards as they're added
+        const observeStationCard = (card) => {
             observer.observe(card);
-        });
+        };
     </script>
 </body>
 </html>
